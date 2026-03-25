@@ -129,7 +129,7 @@ SKWhisper is a background Python daemon that runs alongside OpenClaw. It watches
     "memory_search_before_action": {"count": 8, "note": "Good pattern - searching before acting"}
   },
   "entities": {
-    "people": {"Chef": 200, "David Rich": 30, "Casey": 15, "John Smolinski": 8},
+    "people": {"Chef": 200, "Dave": 30, "Casey": 15, "John S.": 8},
     "projects": {"SKStacks": 50, "Chiropps": 25, "SwapSeat": 20, "SKWhisper": 5}
   },
   "updated_at": "2026-03-24T..."

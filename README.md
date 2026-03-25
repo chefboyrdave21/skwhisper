@@ -127,7 +127,7 @@ graph LR
     subgraph "patterns.json"
         T[🔥 Topics<br/>clone-robotics: 5x<br/>skwhisper: 3x<br/>nootropics: 12x]
         Q[❓ Questions<br/>"how does FEB work": 2x<br/>"what's chef's timezone": 3x]
-        E[👥 Entities<br/>Chef: 200<br/>David Rich: 30<br/>Casey: 15]
+        E[👥 Entities<br/>Chef: 200<br/>Dave: 30<br/>Casey: 15]
         B[🔄 Behaviors<br/>late_night_sessions: 15x<br/>memory_search_first: 8x]
     end
 ```
