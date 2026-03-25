@@ -110,10 +110,158 @@ def test_config():
     print(f"  State dir: {config.state_dir}")
 
 
+def test_classify_session_human():
+    """Human conversations are classified correctly."""
+    from skwhisper.watcher import classify_session
+
+    msgs = [
+        {"role": "user", "text": "Hey Lumina, can you help me debug this async race condition?"},
+        {"role": "assistant", "text": "Sure! Let me look at the code and trace the execution path."},
+        {"role": "user", "text": "The issue appears in the pattern matching logic around line 42."},
+        {"role": "assistant", "text": "I see it. The problem is that you're not awaiting the coroutine."},
+        {"role": "user", "text": "Ah right! Thanks, fixing that now."},
+    ]
+    result = classify_session(msgs)
+    assert result == "human", f"Expected 'human', got '{result}'"
+    print("✓ classify_session (human): OK")
+
+
+def test_classify_session_cron_keyword():
+    """Sessions with cron markers are classified as cron."""
+    from skwhisper.watcher import classify_session
+
+    # [cron:] marker
+    msgs_cron_tag = [
+        {"role": "user", "text": "[cron:moltbook] Running scheduled task"},
+        {"role": "assistant", "text": "Running automated reply sprint..."},
+    ]
+    assert classify_session(msgs_cron_tag) == "cron", "Should detect [cron:] marker"
+
+    # moltbook keyword
+    msgs_moltbook = [
+        {"role": "user", "text": "moltbook reply sprint starting now"},
+        {"role": "assistant", "text": "Processing replies..."},
+    ]
+    assert classify_session(msgs_moltbook) == "cron", "Should detect moltbook keyword"
+
+    # heartbeat keyword
+    msgs_heartbeat = [
+        {"role": "user", "text": "HEARTBEAT check — systems nominal"},
+        {"role": "assistant", "text": "All systems operational."},
+    ]
+    assert classify_session(msgs_heartbeat) == "cron", "Should detect heartbeat keyword"
+
+    # comms-check keyword
+    msgs_comms = [
+        {"role": "user", "text": "comms-check initiated"},
+        {"role": "assistant", "text": "Checking all communication channels..."},
+    ]
+    assert classify_session(msgs_comms) == "cron", "Should detect comms-check keyword"
+
+    print("✓ classify_session (cron keywords): OK")
+
+
+def test_classify_session_cron_file_size():
+    """Small file with few user messages classified as cron."""
+    import tempfile
+    from skwhisper.watcher import classify_session
+
+    msgs = [
+        {"role": "user", "text": "run task"},
+        {"role": "assistant", "text": "done"},
+    ]
+
+    # Write a tiny file (< 6000 bytes, <= 3 user messages)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+        f.write('{"type": "message", "message": {"role": "user", "content": "run task"}}\n')
+        f.write('{"type": "message", "message": {"role": "assistant", "content": "done"}}\n')
+        fname = f.name
+
+    try:
+        from pathlib import Path
+        result = classify_session(msgs, Path(fname))
+        assert result == "cron", f"Tiny file with 1 user msg should be 'cron', got '{result}'"
+        print("✓ classify_session (small file): OK")
+    finally:
+        import os
+        os.unlink(fname)
+
+
+def test_classify_session_no_false_positive():
+    """Multi-turn human session with keywords in later messages isn't misclassified."""
+    from skwhisper.watcher import classify_session
+
+    # The word 'moltbook' only appears after the first 10 messages
+    msgs = [{"role": "user", "text": f"message {i}"} for i in range(15)]
+    msgs.append({"role": "user", "text": "checking moltbook status"})
+
+    result = classify_session(msgs)
+    assert result == "human", f"Late keyword in large session should be 'human', got '{result}'"
+    print("✓ classify_session (no false positive for late keywords): OK")
+
+
+def test_patterns_session_type_tracking():
+    """Topics are tracked per session type (human_count / cron_count)."""
+    from skwhisper.patterns import update_patterns, get_hot_topics, load_patterns
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        state_dir = Path(tmpdir)
+
+        update_patterns(state_dir, "session-h1", {
+            "topics": ["skmemory", "python"],
+            "people": ["Chef"],
+            "projects": ["SKWhisper"],
+            "questions": [],
+            "mood": "positive",
+        }, session_type="human")
+
+        update_patterns(state_dir, "session-h2", {
+            "topics": ["skmemory", "qdrant"],
+            "people": [],
+            "projects": [],
+            "questions": [],
+            "mood": "neutral",
+        }, session_type="human")
+
+        update_patterns(state_dir, "session-c1", {
+            "topics": ["moltbook", "comms-check", "skmemory"],
+            "people": [],
+            "projects": [],
+            "questions": [],
+            "mood": "neutral",
+        }, session_type="cron")
+
+        patterns = load_patterns(state_dir)
+        skmemory = patterns["topics"]["skmemory"]
+        assert skmemory["count"] == 3, f"Total count should be 3, got {skmemory['count']}"
+        assert skmemory.get("human_count", 0) == 2, f"human_count should be 2, got {skmemory.get('human_count')}"
+        assert skmemory.get("cron_count", 0) == 1, f"cron_count should be 1, got {skmemory.get('cron_count')}"
+
+        # get_hot_topics with type filter
+        human_topics = get_hot_topics(state_dir, top_n=5, session_type="human")
+        human_topic_names = [t["topic"] for t in human_topics]
+        assert "skmemory" in human_topic_names
+        assert "moltbook" not in human_topic_names, "moltbook is cron-only, shouldn't appear in human topics"
+
+        cron_topics = get_hot_topics(state_dir, top_n=5, session_type="cron")
+        cron_topic_names = [t["topic"] for t in cron_topics]
+        assert "moltbook" in cron_topic_names
+        assert "python" not in cron_topic_names, "python is human-only, shouldn't appear in cron topics"
+
+        print("✓ patterns session_type tracking: OK")
+        print(f"  Human topics: {human_topic_names}")
+        print(f"  Cron topics: {cron_topic_names}")
+
+
 if __name__ == "__main__":
     print("Running SKWhisper tests...\n")
     test_extract_messages()
     test_skmemory_writer()
     test_patterns()
     test_config()
+    test_classify_session_human()
+    test_classify_session_cron_keyword()
+    test_classify_session_cron_file_size()
+    test_classify_session_no_false_positive()
+    test_patterns_session_type_tracking()
     print("\n✅ All tests passed!")

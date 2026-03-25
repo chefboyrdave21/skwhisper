@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone
 
 from .config import get_config, Config
-from .watcher import scan_sessions, format_messages_for_summary, mark_digested
+from .watcher import scan_sessions, format_messages_for_summary, mark_digested, classify_session, extract_messages, load_state
 from .curator import curate_context
 from .patterns import update_patterns
 from .clients.ollama import OllamaClient
@@ -29,30 +29,34 @@ async def digest_session(
     log.info("Digesting session %s (%d messages)...", session_id[:12], len(messages))
 
     try:
-        # 1. Format messages for summarization
+        # 1. Classify session before processing
+        session_type = classify_session(messages, session.get("path"))
+        log.debug("Session %s classified as: %s", session_id[:12], session_type)
+
+        # 2. Format messages for summarization
         text = format_messages_for_summary(messages)
 
-        # 2. Summarize via ollama
+        # 3. Summarize via ollama
         summary = await ollama.summarize(text)
         if not summary or len(summary) < 20:
             log.warning("Summary too short for session %s, skipping", session_id[:12])
             return False
 
-        # 3. Extract structured topics
+        # 4. Extract structured topics
         extracted = await ollama.extract_topics(summary)
 
-        # 4. Build title from topics
+        # 5. Build title from topics
         topics = extracted.get("topics", [])[:3]
         title_parts = [t.title() for t in topics] if topics else ["Session Digest"]
         title = f"Session Digest — {', '.join(title_parts)}"
 
-        # 5. Determine tags
-        tags = ["skwhisper", "auto-digest"]
+        # 6. Determine tags (include session type for filtering)
+        tags = ["skwhisper", "auto-digest", session_type]
         tags.extend(extracted.get("topics", [])[:5])
         for person in extracted.get("people", [])[:3]:
             tags.append(person.lower().replace(" ", "-"))
 
-        # 6. Determine emotional labels
+        # 7. Determine emotional labels
         mood = extracted.get("mood", "neutral")
         emotions = []
         if mood == "positive":
@@ -62,7 +66,7 @@ async def digest_session(
         elif mood == "mixed":
             emotions = ["reflective"]
 
-        # 7. Write to skmemory
+        # 8. Write to skmemory
         content = f"{summary}\n\nPeople: {', '.join(extracted.get('people', []))}\n"
         content += f"Projects: {', '.join(extracted.get('projects', []))}\n"
         if extracted.get("decisions"):
@@ -76,7 +80,7 @@ async def digest_session(
             intensity=6.0,
         )
 
-        # 8. Embed and upsert to Qdrant
+        # 9. Embed and upsert to Qdrant
         # mxbai-embed-large has ~512 token limit; embed first 800 chars of summary
         vector = await ollama.embed(summary[:800])
         await qdrant.upsert(
@@ -91,15 +95,16 @@ async def digest_session(
                 "emotions": ", ".join(emotions),
                 "source": "skwhisper",
                 "session_id": session_id,
+                "session_type": session_type,
             },
             point_id=mem_id,
         )
 
-        # 9. Update patterns
-        update_patterns(config.state_dir, session_id, extracted)
+        # 10. Update patterns (pass session type so topics can be split by origin)
+        update_patterns(config.state_dir, session_id, extracted, session_type=session_type)
 
-        # 10. Mark as digested
-        mark_digested(config, session_id, session["new_offset"])
+        # 11. Mark as digested (store classification for status reporting)
+        mark_digested(config, session_id, session["new_offset"], session_type=session_type)
 
         log.info("✓ Digested session %s: '%s'", session_id[:12], title)
         return True
@@ -138,6 +143,91 @@ async def run_digest_cycle(config: Config) -> int:
     finally:
         await ollama.close()
         await qdrant.close()
+
+
+async def run_backlog_digest(config: Config, batch_size: int = 10) -> int:
+    """
+    Process ALL undigested sessions that have enough messages, in batches.
+
+    Unlike run_digest_cycle (which respects idle_threshold and only catches
+    recently-changed files), this scans the entire sessions directory and
+    processes anything pending — regardless of timing.
+
+    Returns total number of sessions successfully digested.
+    """
+    sessions_dir = config.sessions_dir
+    state = load_state(config.state_dir)
+
+    # Collect candidates: active .jsonl files + deleted/archived
+    candidates = []
+
+    for path in sorted(sessions_dir.glob("*.jsonl")):
+        session_id = path.stem
+        if state.get("sessions", {}).get(session_id, {}).get("digested"):
+            continue
+        messages, final_offset = extract_messages(path, 0)
+        if len(messages) >= config.min_messages:
+            candidates.append({
+                "path": path,
+                "session_id": session_id,
+                "messages": messages,
+                "new_offset": final_offset,
+                "is_idle": True,
+            })
+
+    for suffix in ("*.deleted.*", "*.archived.*"):
+        for path in sorted(sessions_dir.glob(suffix)):
+            parts = path.name.split(".")
+            if len(parts) < 2:
+                continue
+            session_id = parts[0]
+            if state.get("sessions", {}).get(session_id, {}).get("digested"):
+                continue
+            messages, final_offset = extract_messages(path, 0)
+            if len(messages) >= config.min_messages:
+                candidates.append({
+                    "path": path,
+                    "session_id": session_id,
+                    "messages": messages,
+                    "new_offset": final_offset,
+                    "is_idle": True,
+                })
+
+    total = len(candidates)
+    if total == 0:
+        print("No pending sessions to digest.")
+        return 0
+
+    print(f"Found {total} sessions pending digest.")
+    total_batches = (total + batch_size - 1) // batch_size
+
+    ollama = OllamaClient(config.ollama_url, config.embed_model, config.summarize_model)
+    qdrant = QdrantClient(config.qdrant_url, config.qdrant_api_key, config.qdrant_collection)
+    memory = SKMemoryWriter(config.memory_dir)
+
+    digested = 0
+    try:
+        for batch_start in range(0, total, batch_size):
+            batch = candidates[batch_start:batch_start + batch_size]
+            batch_num = batch_start // batch_size + 1
+            print(f"\nBatch {batch_num}/{total_batches} ({len(batch)} sessions)...")
+
+            for j, session in enumerate(batch, 1):
+                idx = batch_start + j
+                print(f"  [{idx}/{total}] {session['session_id'][:16]}...", end=" ", flush=True)
+                ok = await digest_session(config, session, ollama, qdrant, memory)
+                if ok:
+                    digested += 1
+                    print("✓")
+                else:
+                    print("✗")
+                await asyncio.sleep(1)
+    finally:
+        await ollama.close()
+        await qdrant.close()
+
+    print(f"\nBacklog complete: {digested}/{total} sessions digested.")
+    return digested
 
 
 async def run_daemon(config: Config):

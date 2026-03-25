@@ -10,6 +10,46 @@ from .config import Config
 
 log = logging.getLogger("skwhisper.watcher")
 
+# Keywords that indicate an automated/cron session rather than a human conversation
+_CRON_KEYWORDS = (
+    "[cron:",
+    "moltbook",
+    "heartbeat",
+    "reply sprint",
+    "self-reflection: review",
+    "morning-motivation",
+    "comms-check",
+    "gmail-check",
+)
+
+
+def classify_session(messages: list[dict], path: Path | None = None) -> str:
+    """
+    Classify a session as 'human' or 'cron'.
+
+    Primary signal: content patterns in early messages (cron markers, automation keywords).
+    Secondary signal: very small file + few user turns suggests an automated session.
+
+    Returns 'cron' or 'human'.
+    """
+    # Check first 10 messages for cron markers
+    for msg in messages[:10]:
+        text = msg.get("text", "").lower()
+        if any(kw in text for kw in _CRON_KEYWORDS):
+            return "cron"
+
+    # Secondary: tiny file + very few user messages → likely automated
+    if path is not None and messages:
+        user_count = sum(1 for m in messages if m["role"] == "user")
+        try:
+            size = path.stat().st_size
+            if size < 6000 and user_count <= 3:
+                return "cron"
+        except OSError:
+            pass
+
+    return "human"
+
 
 def load_state(state_dir: Path) -> dict:
     """Load watcher state (offsets per session file)."""
@@ -216,7 +256,7 @@ def format_messages_for_summary(messages: list[dict], max_chars: int = 15000) ->
     return "\n\n".join(lines)
 
 
-def mark_digested(config: Config, session_id: str, offset: int):
+def mark_digested(config: Config, session_id: str, offset: int, session_type: str = "human"):
     """Mark a session as fully digested in state."""
     state = load_state(config.state_dir)
     if "sessions" not in state:
@@ -224,6 +264,7 @@ def mark_digested(config: Config, session_id: str, offset: int):
     state["sessions"][session_id] = {
         "offset": offset,
         "digested": True,
+        "session_type": session_type,
         "digested_at": datetime.now(timezone.utc).isoformat(),
     }
     save_state(config.state_dir, state)

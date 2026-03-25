@@ -8,10 +8,10 @@ import json
 from pathlib import Path
 
 from .config import get_config
-from .daemon import run_daemon, run_digest_cycle
+from .daemon import run_daemon, run_digest_cycle, run_backlog_digest
 from .curator import curate_context
 from .patterns import load_patterns, get_hot_topics, get_repeated_questions
-from .watcher import load_state
+from .watcher import load_state, extract_messages
 
 
 def setup_logging(verbose: bool = False):
@@ -33,10 +33,13 @@ def cmd_daemon(args):
 
 
 def cmd_digest(args):
-    """Run one digest cycle."""
+    """Run one digest cycle, or process the full backlog."""
     config = get_config(args.config)
-    count = asyncio.run(run_digest_cycle(config))
-    print(f"Digested {count} sessions.")
+    if args.backlog:
+        asyncio.run(run_backlog_digest(config, batch_size=args.batch_size))
+    else:
+        count = asyncio.run(run_digest_cycle(config))
+        print(f"Digested {count} sessions.")
 
 
 def cmd_curate(args):
@@ -92,30 +95,152 @@ def cmd_patterns(args):
     print(f"\nUpdated: {patterns.get('updated_at', 'never')}")
 
 
+def _check_daemon_health() -> str:
+    """Check if the skwhisper systemd user service is active."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-active", "skwhisper"],
+            capture_output=True, text=True, timeout=5,
+        )
+        status = result.stdout.strip()
+        return status if status else "unknown"
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return "unknown"
+
+
 def cmd_status(args):
-    """Show daemon status."""
+    """Show daemon status with session breakdown and topic distribution."""
+    import os
+    from datetime import datetime
+
     config = get_config(args.config)
     state = load_state(config.state_dir)
-    patterns = load_patterns(config.state_dir)
+    sessions = state.get("sessions", {})
+    sessions_dir = config.sessions_dir
     whisper_path = config.state_dir / "whisper.md"
 
-    total = len(state.get("sessions", {}))
-    digested = sum(1 for s in state.get("sessions", {}).values() if s.get("digested"))
-    pending = total - digested
+    # --- Session breakdown ---
+    # Note: legacy state uses digested_at as a status sentinel for non-digested outcomes
+    # ("skipped-too-few-messages", "cleaned-missing-file") with digested=True.
+    # Real digests have ISO timestamp strings starting with '2'.
+    n_digested = 0
+    n_pending = 0
+    n_skipped = 0
+    n_missing = 0
+    last_digest_ts = None
+    human_digested = 0
+    cron_digested = 0
+    unknown_digested = 0
 
+    for session_id, s in sessions.items():
+        digested_at = s.get("digested_at", "")
+        if digested_at == "skipped-too-few-messages":
+            n_skipped += 1
+        elif digested_at == "cleaned-missing-file":
+            n_missing += 1
+        elif s.get("digested"):
+            # Real digest — has ISO timestamp or no digested_at (older format)
+            n_digested += 1
+            stype = s.get("session_type", "unknown")
+            if stype == "human":
+                human_digested += 1
+            elif stype == "cron":
+                cron_digested += 1
+            else:
+                unknown_digested += 1
+            # Track most recent digest timestamp (ISO strings start with '2')
+            if digested_at and digested_at.startswith("2"):
+                if last_digest_ts is None or digested_at > last_digest_ts:
+                    last_digest_ts = digested_at
+        else:
+            # Not digested — check if file still exists and has enough messages
+            active = sessions_dir / f"{session_id}.jsonl"
+            deleted = list(sessions_dir.glob(f"{session_id}.jsonl.deleted.*"))
+            archived = list(sessions_dir.glob(f"{session_id}.jsonl.archived.*"))
+            file_path = active if active.exists() else (deleted or archived or [None])[0]
+
+            if file_path is None:
+                n_missing += 1
+            else:
+                msg_count = s.get("message_count", 0)
+                if msg_count < config.min_messages:
+                    n_skipped += 1
+                else:
+                    n_pending += 1
+
+    # Also count files on disk not yet tracked in state
+    for path in sessions_dir.glob("*.jsonl"):
+        sid = path.stem
+        if sid not in sessions:
+            n_pending += 1
+
+    # --- Daemon health ---
+    daemon_status = _check_daemon_health()
+
+    # --- Display ---
     print("═══ SKWhisper Status ═══\n")
+
+    # Session breakdown
+    total = len(sessions)
     print(f"Sessions tracked:    {total}")
-    print(f"Sessions digested:   {digested}")
-    print(f"Sessions pending:    {pending}")
-    print(f"Last run:            {state.get('last_run', 'never')}")
+    print(f"  Digested:          {n_digested}")
+    if n_digested:
+        type_parts = []
+        if human_digested:
+            type_parts.append(f"{human_digested} human")
+        if cron_digested:
+            type_parts.append(f"{cron_digested} cron")
+        if unknown_digested:
+            type_parts.append(f"{unknown_digested} unclassified")
+        if type_parts:
+            print(f"    ({', '.join(type_parts)})")
+    print(f"  Pending:           {n_pending}")
+    print(f"  Skipped (<{config.min_messages} msgs): {n_skipped}")
+    print(f"  Missing file:      {n_missing}")
+    print()
+
+    # Timing
+    print(f"Last state update:   {state.get('last_run', 'never')}")
+    print(f"Last digest:         {last_digest_ts or 'never'}")
+    print()
+
+    # Whisper file
+    if whisper_path.exists():
+        mtime = os.path.getmtime(whisper_path)
+        whisper_age = datetime.fromtimestamp(mtime).isoformat()
+        print(f"Whisper updated:     {whisper_age}")
+    else:
+        print("Whisper file:        not yet generated")
+    print()
+
+    # Daemon health
+    daemon_icon = "✓" if daemon_status == "active" else "✗"
+    print(f"Daemon (systemd):    {daemon_icon} {daemon_status}")
+    print()
+
+    # Topic distribution: top 5 human vs top 5 cron
+    human_topics = get_hot_topics(config.state_dir, top_n=5, session_type="human")
+    cron_topics = get_hot_topics(config.state_dir, top_n=5, session_type="cron")
+
+    if human_topics or cron_topics:
+        print("Top Topics by Session Type:")
+        print()
+        if human_topics:
+            print("  Human:")
+            for t in human_topics:
+                print(f"    {t['topic']:30s}  {t['count']:3d}x")
+        if cron_topics:
+            print("  Cron:")
+            for t in cron_topics:
+                print(f"    {t['topic']:30s}  {t['count']:3d}x")
+        print()
+
+    # Overall pattern stats
+    patterns = load_patterns(config.state_dir)
     print(f"Topics tracked:      {len(patterns.get('topics', {}))}")
     print(f"Questions tracked:   {len(patterns.get('questions', {}))}")
-    print(f"Whisper file:        {'exists' if whisper_path.exists() else 'not yet generated'}")
-    if whisper_path.exists():
-        import os
-        mtime = os.path.getmtime(whisper_path)
-        from datetime import datetime
-        print(f"Whisper updated:     {datetime.fromtimestamp(mtime).isoformat()}")
+    print(f"Patterns updated:    {patterns.get('updated_at', 'never')}")
 
 
 def main():
@@ -129,7 +254,16 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("daemon", help="Run the background daemon")
-    sub.add_parser("digest", help="Run one digest cycle")
+
+    digest_p = sub.add_parser("digest", help="Run one digest cycle (or full backlog)")
+    digest_p.add_argument(
+        "--backlog", action="store_true",
+        help="Process all undigested sessions (ignores idle_threshold)",
+    )
+    digest_p.add_argument(
+        "--batch-size", type=int, default=10, metavar="N",
+        help="Sessions per batch when using --backlog (default: 10)",
+    )
 
     curate_p = sub.add_parser("curate", help="Generate fresh whisper context")
     curate_p.add_argument("--stdout", action="store_true", help="Print to stdout instead of file")

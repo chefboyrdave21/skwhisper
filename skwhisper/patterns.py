@@ -36,13 +36,16 @@ def update_patterns(
     state_dir: Path,
     session_id: str,
     extracted: dict,
+    session_type: str = "human",
 ) -> dict:
     """
     Update patterns with extracted data from a digested session.
     `extracted` comes from OllamaClient.extract_topics().
+    `session_type` is 'human' or 'cron', used to track topic origin.
     """
     patterns = load_patterns(state_dir)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    type_count_key = f"{session_type}_count"
 
     # Topics
     for topic in extracted.get("topics", []):
@@ -53,6 +56,7 @@ def update_patterns(
             entry = patterns["topics"][topic]
             entry["count"] += 1
             entry["last"] = today
+            entry[type_count_key] = entry.get(type_count_key, 0) + 1
             if session_id not in entry.get("sessions", []):
                 entry.setdefault("sessions", []).append(session_id)
                 # Keep only last 20 session refs
@@ -63,6 +67,7 @@ def update_patterns(
                 "first": today,
                 "last": today,
                 "sessions": [session_id],
+                type_count_key: 1,
             }
 
     # Questions
@@ -118,13 +123,26 @@ def update_patterns(
     return patterns
 
 
-def get_hot_topics(state_dir: Path, top_n: int = 10) -> list[dict]:
-    """Get the most frequently discussed topics, sorted by count."""
+def get_hot_topics(state_dir: Path, top_n: int = 10, session_type: str | None = None) -> list[dict]:
+    """
+    Get the most frequently discussed topics, sorted by count.
+    If session_type is 'human' or 'cron', filter and rank by that type's count only.
+    """
     patterns = load_patterns(state_dir)
-    topics = [
-        {"topic": k, **v}
-        for k, v in patterns.get("topics", {}).items()
-    ]
+    topics = []
+    for k, v in patterns.get("topics", {}).items():
+        if session_type is not None:
+            count = v.get(f"{session_type}_count", 0)
+            if count == 0:
+                continue
+        else:
+            count = v.get("count", 0)
+        topics.append({
+            "topic": k,
+            "count": count,
+            "first": v.get("first"),
+            "last": v.get("last"),
+        })
     topics.sort(key=lambda t: t["count"], reverse=True)
     return topics[:top_n]
 
