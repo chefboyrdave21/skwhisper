@@ -60,8 +60,38 @@ async def curate_context(config: Config) -> str:
         await qdrant.close()
 
 
+def _is_cron_session(path: Path) -> bool:
+    """Detect if a session was triggered by cron (automated, not human-driven)."""
+    import json
+    try:
+        with open(path) as f:
+            for i, line in enumerate(f):
+                if i > 15:  # Only check first few lines
+                    break
+                try:
+                    entry = json.loads(line.strip())
+                    # Cron sessions have [cron:...] markers in early messages
+                    text = entry.get("message", {}).get("content", "")
+                    if isinstance(text, str) and "[cron:" in text:
+                        return True
+                    # Also check for common cron task patterns
+                    if isinstance(text, str) and any(kw in text.lower() for kw in [
+                        "moltbook reply sprint",
+                        "self-reflection: review",
+                        "morning-motivation",
+                        "comms-check",
+                        "gmail-check",
+                    ]):
+                        return True
+                except (json.JSONDecodeError, KeyError):
+                    continue
+    except OSError:
+        pass
+    return False
+
+
 def _get_recent_context(config: Config) -> str:
-    """Extract text from the most recent active sessions."""
+    """Extract text from the most recent active sessions, prioritizing human-driven ones."""
     sessions_dir = config.sessions_dir
     # Get most recent active .jsonl files by mtime
     active = sorted(
@@ -70,8 +100,29 @@ def _get_recent_context(config: Config) -> str:
         reverse=True,
     )
 
+    # Separate human-driven sessions from cron/automated sessions
+    human_sessions = []
+    cron_sessions = []
+    for path in active[:20]:  # Check last 20 sessions
+        if _is_cron_session(path):
+            cron_sessions.append(path)
+        else:
+            human_sessions.append(path)
+
+    # Prioritize: 2 human sessions + 1 cron (for variety), or all human if enough
+    selected = human_sessions[:2]
+    if len(selected) < 3 and cron_sessions:
+        selected.append(cron_sessions[0])
+    elif len(human_sessions) >= 3:
+        selected = human_sessions[:3]
+
+    log.info("Context selection: %d human, %d cron (from %d checked)",
+             len([s for s in selected if s in human_sessions]),
+             len([s for s in selected if s in cron_sessions]),
+             min(len(active), 20))
+
     all_text = []
-    for path in active[:3]:  # Last 3 sessions
+    for path in selected:
         messages, _ = extract_messages(path, 0)
         for msg in messages[-20:]:  # Last 20 messages per session
             role = "Chef" if msg["role"] == "user" else "Lumina"
