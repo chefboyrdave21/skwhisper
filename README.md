@@ -237,17 +237,80 @@ All state lives in `~/.skcapstone/agents/lumina/skwhisper/`:
 | `patterns.json` | Accumulated behavioral patterns |
 | `daemon.log` | Service log |
 
+## Triple-Write Storage
+
+Every digested session writes to **three** storage backends simultaneously:
+
+```mermaid
+graph LR
+    D["🧠 Digest Engine"] --> SM["skmemory<br/>📂 3-tier JSON"]
+    D --> SV["skvector<br/>🔍 Qdrant 1024d"]
+    D --> SG["skgraph<br/>🕸️ FalkorDB"]
+
+    SM --> |"Keyword search"| L["Lumina"]
+    SV --> |"Semantic search"| L
+    SG --> |"Graph traversal"| L
+
+    style SM fill:#bfb
+    style SV fill:#bbf
+    style SG fill:#f9f
+```
+
+| Backend | What it stores | Query style |
+|---------|---------------|-------------|
+| **skmemory** | JSON files in short/mid/long tiers | Keyword search, TTL promotion |
+| **skvector** (Qdrant) | 1024d embeddings + metadata | "Find stuff similar to X" |
+| **skgraph** (FalkorDB) | Memory→Person→Project→Tag nodes | "How does X connect to Y?" |
+
+## Cron Filtering
+
+Sessions from scheduled tasks (heartbeats, daily checks) are automatically **skipped** to prevent automated noise from polluting memory:
+
+```toml
+# config/skwhisper.toml
+[watcher]
+skip_cron = true
+```
+
+The daemon classifies sessions by examining their initial messages for heartbeat/cron patterns. Human conversations get digested; automated runs get skipped.
+
+## Claude Code Hooks
+
+SKWhisper hooks into Claude Code to inject context at session start and capture digests at session end:
+
+```
+hooks/
+├── skwhisper-inject.sh    # Linux/macOS — SessionStart + PreCompact
+├── skwhisper-inject.ps1   # Windows — SessionStart + PreCompact
+├── skwhisper-save.sh      # Linux/macOS — SessionEnd
+├── skwhisper-save.ps1     # Windows — SessionEnd
+├── install-hooks.sh       # Linux/macOS installer
+└── install-hooks.ps1      # Windows installer
+```
+
+Install: `cd hooks && ./install-hooks.sh`
+
+This adds three events to `~/.claude/settings.json`:
+- **SessionStart** → injects whisper.md context
+- **PreCompact** → re-injects whisper.md (survives compaction)
+- **SessionEnd** → triggers digest + re-curate
+
+## Documentation
+
+- **[EXAMPLES.md](docs/EXAMPLES.md)** — Real-world usage examples, graph queries, pipeline walkthroughs
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — Deep technical architecture document
+
 ## Dependencies
 
-- Python 3.14 ✅ (on noroc2027)
+- Python 3.14 ✅ (linuxbrew on noroc2027)
 - httpx ✅ (already installed)
+- redis ✅ (for skgraph/FalkorDB)
 - tomllib ✅ (stdlib 3.14)
 - Ollama @ 192.168.0.100:11434
   - `mxbai-embed-large` for embeddings (1024d)
-  - `llama3.2:3b` for summarization (CPU) / `qwen3.5:9b` (GPU)
+  - `llama3.2:3b` for summarization / `qwen3.5:9b` (GPU)
 - Qdrant @ skvector.skstack01.douno.it
-
-**Zero pip installs needed.**
+- FalkorDB @ 192.168.0.59:16379
 
 ## License
 
@@ -255,5 +318,5 @@ GPL v3.0 — Part of the SKStacks ecosystem.
 
 ---
 
-*Built by Opus & Lumina, March 24, 2026*
+*Built by Opus & Lumina, March 2026*
 *"The subconscious that never forgets."* 🌙🐧

@@ -23,6 +23,7 @@ DEFAULTS = {
     "max_whisper_tokens": 2000,
     "top_n_topics": 20,
     "decay_days": 30,
+    "skip_cron": True,
 }
 
 

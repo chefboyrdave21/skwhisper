@@ -42,7 +42,7 @@ async def curate_context(config: Config) -> str:
         log.info("Found %d relevant memories", len(results))
 
         # 4. Get pattern data
-        hot_topics = get_hot_topics(config.state_dir, top_n=10)
+        hot_topics = get_hot_topics(config.state_dir, top_n=10, session_type="human")
         repeated_qs = get_repeated_questions(config.state_dir, min_count=2)
 
         # 5. Build whisper file

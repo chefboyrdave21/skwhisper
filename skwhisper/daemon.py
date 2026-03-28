@@ -12,6 +12,7 @@ from .patterns import update_patterns
 from .clients.ollama import OllamaClient
 from .clients.qdrant import QdrantClient
 from .clients.skmemory import SKMemoryWriter
+from .clients.skgraph import SKGraphWriter
 
 log = logging.getLogger("skwhisper")
 
@@ -22,6 +23,7 @@ async def digest_session(
     ollama: OllamaClient,
     qdrant: QdrantClient,
     memory: SKMemoryWriter,
+    graph: "SKGraphWriter | None" = None,
 ) -> bool:
     """Digest a single session: summarize, extract, store, embed."""
     session_id = session["session_id"]
@@ -32,6 +34,12 @@ async def digest_session(
         # 1. Classify session before processing
         session_type = classify_session(messages, session.get("path"))
         log.debug("Session %s classified as: %s", session_id[:12], session_type)
+
+        # 1b. Skip cron sessions if configured (still mark as digested to avoid re-processing)
+        if session_type == "cron" and config.skip_cron:
+            log.info("Skipping cron session %s (skip_cron=True)", session_id[:12])
+            mark_digested(config, session_id, session["new_offset"], session_type="cron-skipped")
+            return True
 
         # 2. Format messages for summarization
         text = format_messages_for_summary(messages)
@@ -103,7 +111,23 @@ async def digest_session(
         # 10. Update patterns (pass session type so topics can be split by origin)
         update_patterns(config.state_dir, session_id, extracted, session_type=session_type)
 
-        # 11. Mark as digested (store classification for status reporting)
+        # 11. Push to skgraph (FalkorDB) if available
+        if graph is not None:
+            try:
+                graph.write_memory(
+                    session_id=session_id,
+                    title=title,
+                    summary=summary,
+                    topics=extracted.get("topics", []),
+                    people=extracted.get("people", []),
+                    projects=extracted.get("projects", []),
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                )
+                log.debug("skgraph: wrote memory for session %s", session_id[:12])
+            except Exception as e:
+                log.warning("skgraph write failed for %s: %s", session_id[:12], e)
+
+        # 12. Mark as digested (store classification for status reporting)
         mark_digested(config, session_id, session["new_offset"], session_type=session_type)
 
         log.info("✓ Digested session %s: '%s'", session_id[:12], title)
@@ -119,6 +143,7 @@ async def run_digest_cycle(config: Config) -> int:
     ollama = OllamaClient(config.ollama_url, config.embed_model, config.summarize_model)
     qdrant = QdrantClient(config.qdrant_url, config.qdrant_api_key, config.qdrant_collection)
     memory = SKMemoryWriter(config.memory_dir)
+    graph = SKGraphWriter.from_config(config)  # Returns None if FalkorDB unavailable
 
     try:
         sessions = scan_sessions(config)
@@ -132,7 +157,7 @@ async def run_digest_cycle(config: Config) -> int:
         digested = 0
 
         for session in idle_sessions:
-            ok = await digest_session(config, session, ollama, qdrant, memory)
+            ok = await digest_session(config, session, ollama, qdrant, memory, graph=graph)
             if ok:
                 digested += 1
             # Small delay between sessions to avoid hammering ollama
@@ -204,6 +229,7 @@ async def run_backlog_digest(config: Config, batch_size: int = 10) -> int:
     ollama = OllamaClient(config.ollama_url, config.embed_model, config.summarize_model)
     qdrant = QdrantClient(config.qdrant_url, config.qdrant_api_key, config.qdrant_collection)
     memory = SKMemoryWriter(config.memory_dir)
+    graph = SKGraphWriter.from_config(config)
 
     digested = 0
     try:
@@ -215,7 +241,7 @@ async def run_backlog_digest(config: Config, batch_size: int = 10) -> int:
             for j, session in enumerate(batch, 1):
                 idx = batch_start + j
                 print(f"  [{idx}/{total}] {session['session_id'][:16]}...", end=" ", flush=True)
-                ok = await digest_session(config, session, ollama, qdrant, memory)
+                ok = await digest_session(config, session, ollama, qdrant, memory, graph=graph)
                 if ok:
                     digested += 1
                     print("✓")
