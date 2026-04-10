@@ -1,9 +1,16 @@
 # SKWhisper Configuration
+#
+# Agent-specific paths are resolved at runtime from SKCAPSTONE_AGENT env var.
+# You do NOT need to edit this file per-agent — just set SKCAPSTONE_AGENT before
+# starting the daemon (e.g. SKCAPSTONE_AGENT=jarvis skwhisper).
+#
+# Override any value here to pin it regardless of SKCAPSTONE_AGENT.
 
 [paths]
-sessions_dir = "~/.openclaw/agents/lumina/sessions"
-memory_dir = "~/.skcapstone/agents/lumina/memory"
-state_dir = "~/.skcapstone/agents/lumina/skwhisper"
+# Uncomment to override agent-specific defaults:
+# sessions_dir = "~/.openclaw/agents/lumina/sessions"
+# memory_dir   = "~/.skcapstone/agents/lumina/memory"
+# state_dir    = "~/.skcapstone/agents/lumina/skwhisper"
 
 [ollama]
 base_url = "http://192.168.0.100:11434"
@@ -13,7 +20,14 @@ summarize_model = "llama3.2:3b"
 [qdrant]
 url = "https://skvector.skstack01.douno.it"
 api_key = "e4hPZkg0Q899N7x0FmgNPT+s8QvY7a/LOnl0go1QCIQ"
-collection = "lumina-memory"
+# collection is auto-derived as "{agent}-memory" — override here if needed:
+# collection = "lumina-memory"
+
+[falkordb]
+host = "192.168.0.59"
+port = 16379
+# graph is auto-derived as "{agent}_knowledge" — override here if needed:
+# graph = "lumina_knowledge"
 
 [watcher]
 # How often to check for new session content (seconds)

@@ -125,7 +125,8 @@ def _get_recent_context(config: Config) -> str:
     for path in selected:
         messages, _ = extract_messages(path, 0)
         for msg in messages[-20:]:  # Last 20 messages per session
-            role = "Chef" if msg["role"] == "user" else "Lumina"
+            agent_display = getattr(config, "agent_name", "lumina").capitalize()
+            role = "Chef" if msg["role"] == "user" else agent_display
             all_text.append(f"{role}: {msg['text'][:500]}")
 
     return "\n".join(all_text)[:8000]

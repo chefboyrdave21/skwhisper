@@ -4,17 +4,24 @@ from pathlib import Path
 import tomllib
 import os
 
-# Defaults
+# Resolve active agent from env (matches sk-agent-picker.sh convention)
+_AGENT = os.environ.get("SKCAPSTONE_AGENT", "lumina")
+
+# Defaults — all agent-specific paths use _AGENT
 DEFAULTS = {
-    "sessions_dir": Path.home() / ".openclaw" / "agents" / "lumina" / "sessions",
-    "memory_dir": Path.home() / ".skcapstone" / "agents" / "lumina" / "memory",
-    "state_dir": Path.home() / ".skcapstone" / "agents" / "lumina" / "skwhisper",
+    "agent_name": _AGENT,
+    "sessions_dir": Path.home() / ".openclaw" / "agents" / _AGENT / "sessions",
+    "memory_dir": Path.home() / ".skcapstone" / "agents" / _AGENT / "memory",
+    "state_dir": Path.home() / ".skcapstone" / "agents" / _AGENT / "skwhisper",
     "ollama_url": "http://192.168.0.100:11434",
     "embed_model": "mxbai-embed-large",
     "summarize_model": "llama3.2:3b",
     "qdrant_url": "https://skvector.skstack01.douno.it",
     "qdrant_api_key": "e4hPZkg0Q899N7x0FmgNPT+s8QvY7a/LOnl0go1QCIQ",
-    "qdrant_collection": "lumina-memory",
+    "qdrant_collection": f"{_AGENT}-memory",
+    "falkordb_host": "192.168.0.59",
+    "falkordb_port": 16379,
+    "falkordb_graph": f"{_AGENT}_knowledge",
     "poll_interval": 60,
     "idle_threshold": 300,
     "min_messages": 5,
@@ -72,3 +79,9 @@ def get_config(path: str | Path | None = None) -> Config:
         default_path = Path.home() / "clawd" / "projects" / "skwhisper" / "config" / "skwhisper.toml"
         _config = Config(path or default_path)
     return _config
+
+
+def reset_config() -> None:
+    """Force re-resolution of SKCAPSTONE_AGENT (useful when env changes between calls)."""
+    global _config
+    _config = None
