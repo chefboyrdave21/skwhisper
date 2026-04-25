@@ -60,7 +60,10 @@ graph TB
 
 ### 1. 🔍 Transcript Watcher (`watcher.py`)
 
-Monitors `~/.skcapstone/agents/{agent}/sessions/*.jsonl` for idle sessions (no activity for 5 minutes). Extracts user/assistant messages, skipping tool calls and rehydration preambles. Supports both Claude Code and OpenClaw JSONL schemas. Symlink your runtime's session dir into the sovereign path (e.g. `~/.skcapstone/agents/opus/sessions → ~/.claude/projects/-home-cbrd21`).
+Monitors `~/.skcapstone/agents/{agent}/sessions/*.jsonl` for idle sessions (no activity for 5 minutes). Extracts user/assistant messages, skipping tool calls and rehydration preambles. Supports **three** JSONL schemas — Claude Code, Hermes, and OpenClaw legacy. Symlink your runtime's session dir into the sovereign path:
+
+- `~/.skcapstone/agents/opus/sessions → ~/.claude/projects/-home-cbrd21`
+- `~/.skcapstone/agents/lumina/sessions → ~/.hermes/sessions`
 
 ```mermaid
 sequenceDiagram

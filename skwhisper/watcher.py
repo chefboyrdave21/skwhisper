@@ -93,15 +93,22 @@ def extract_messages(jsonl_path: Path, offset: int = 0) -> tuple[list[dict], int
                 except json.JSONDecodeError:
                     continue
 
-                # Accept both schemas:
+                # Accept three schemas:
                 #   - OpenClaw legacy: entry.type == "message", message.{role,content}
                 #   - Claude Code:     entry.type == "user" | "assistant", message.{role,content}
+                #   - Hermes:          entry.role at top level, content at top level
+                #                      (no "type", no "message" wrapper). Skip session_meta.
                 entry_type = entry.get("type")
+                top_role = entry.get("role")
                 if entry_type == "message":
                     msg = entry.get("message", {})
                 elif entry_type in ("user", "assistant"):
                     msg = entry.get("message", {}) or {"role": entry_type, "content": entry.get("content", "")}
+                elif top_role in ("user", "assistant") and entry_type is None:
+                    # Hermes shape — use top-level role + content
+                    msg = {"role": top_role, "content": entry.get("content", "")}
                 else:
+                    # Includes Hermes session_meta and any unknown line types
                     continue
 
                 role = msg.get("role", "")

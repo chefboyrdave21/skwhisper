@@ -53,9 +53,10 @@ SKWhisper is a background Python daemon that runs alongside OpenClaw. It watches
 
 **Process per session file change:**
 1. Read new JSONL lines since last processed offset (tracked in `state.json`)
-2. Extract conversational lines — supports both schemas:
+2. Extract conversational lines — supports three schemas:
    - OpenClaw: `type=message` with nested `message.{role,content}`
    - Claude Code: `type=user|assistant` with nested `message.{role,content}`
+   - Hermes: top-level `role=user|assistant` + top-level `content` (no `type`, no `message` wrapper). The `role=session_meta` header line is skipped.
 3. Skip tool calls/results (too noisy), keep only conversational content
 4. When a session goes idle (no new lines for 5 minutes) OR file gets `.deleted` suffix:
    - Batch all undigested messages

@@ -35,6 +35,32 @@ def test_extract_messages():
         os.unlink(fname)
 
 
+def test_extract_messages_hermes_schema():
+    """Hermes writes role+content+timestamp at the top level (no `type`, no `message` wrapper)."""
+    from skwhisper.watcher import extract_messages
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+        lines = [
+            {"role": "session_meta", "tools": [], "model": "kimi", "platform": "hermes", "timestamp": "2026-04-25T00:00:00Z"},
+            {"role": "user", "content": "Welcome back to Hermes!", "timestamp": "2026-04-25T00:00:01Z"},
+            {"role": "assistant", "content": "Thanks Chef — Hermes feels lighter than OpenClaw.", "reasoning": "...", "timestamp": "2026-04-25T00:00:02Z"},
+            {"role": "tool", "content": "irrelevant tool output", "timestamp": "2026-04-25T00:00:03Z"},
+        ]
+        for line in lines:
+            f.write(json.dumps(line) + "\n")
+        fname = f.name
+
+    try:
+        messages, _ = extract_messages(Path(fname), 0)
+        assert len(messages) == 2, f"Expected 2 (user + assistant), got {len(messages)}"
+        assert messages[0]["role"] == "user"
+        assert messages[0]["text"] == "Welcome back to Hermes!"
+        assert messages[1]["role"] == "assistant"
+        assert "Hermes feels lighter" in messages[1]["text"]
+    finally:
+        os.unlink(fname)
+
+
 def test_skmemory_writer():
     """Test writing skmemory snapshots."""
     from skwhisper.clients.skmemory import SKMemoryWriter
