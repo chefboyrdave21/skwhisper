@@ -4,13 +4,16 @@ from pathlib import Path
 import tomllib
 import os
 
-# Resolve active agent from env (matches sk-agent-picker.sh convention)
-_AGENT = os.environ.get("SKCAPSTONE_AGENT", "lumina")
+# Resolve active agent from env. SKAGENT is the primary source of truth
+# (matches skmemory). SKCAPSTONE_AGENT kept for backward compatibility.
+_AGENT = os.environ.get("SKAGENT") or os.environ.get("SKCAPSTONE_AGENT") or "lumina"
 
-# Defaults — all agent-specific paths use _AGENT
+# Defaults — all agent-specific paths use _AGENT.
+# Sessions live under the sovereign agent home; sources (Claude Code, Hermes,
+# OpenClaw, etc.) symlink or write into ~/.skcapstone/agents/{agent}/sessions/.
 DEFAULTS = {
     "agent_name": _AGENT,
-    "sessions_dir": Path.home() / ".openclaw" / "agents" / _AGENT / "sessions",
+    "sessions_dir": Path.home() / ".skcapstone" / "agents" / _AGENT / "sessions",
     "memory_dir": Path.home() / ".skcapstone" / "agents" / _AGENT / "memory",
     "state_dir": Path.home() / ".skcapstone" / "agents" / _AGENT / "skwhisper",
     "ollama_url": "http://192.168.0.100:11434",

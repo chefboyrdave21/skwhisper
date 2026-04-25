@@ -49,11 +49,13 @@ SKWhisper is a background Python daemon that runs alongside OpenClaw. It watches
 
 ### 1. Transcript Watcher (`watcher.py`)
 
-**Trigger:** inotify (via `asyncio` + low-level inotify or polling fallback) on `~/.openclaw/agents/lumina/sessions/*.jsonl`
+**Trigger:** inotify (via `asyncio` + low-level inotify or polling fallback) on `~/.skcapstone/agents/{agent}/sessions/*.jsonl`
 
 **Process per session file change:**
 1. Read new JSONL lines since last processed offset (tracked in `state.json`)
-2. Extract `type=message` lines where `role=user` or `role=assistant`
+2. Extract conversational lines — supports both schemas:
+   - OpenClaw: `type=message` with nested `message.{role,content}`
+   - Claude Code: `type=user|assistant` with nested `message.{role,content}`
 3. Skip tool calls/results (too noisy), keep only conversational content
 4. When a session goes idle (no new lines for 5 minutes) OR file gets `.deleted` suffix:
    - Batch all undigested messages
@@ -209,7 +211,7 @@ All runtime state lives in: `~/.skcapstone/agents/lumina/skwhisper/`
 
 ```toml
 [paths]
-sessions_dir = "~/.openclaw/agents/lumina/sessions"
+sessions_dir = "~/.skcapstone/agents/lumina/sessions"
 memory_dir = "~/.skcapstone/agents/lumina/memory"
 state_dir = "~/.skcapstone/agents/lumina/skwhisper"
 

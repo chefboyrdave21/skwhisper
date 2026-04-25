@@ -93,11 +93,20 @@ def extract_messages(jsonl_path: Path, offset: int = 0) -> tuple[list[dict], int
                 except json.JSONDecodeError:
                     continue
 
-                if entry.get("type") != "message":
+                # Accept both schemas:
+                #   - OpenClaw legacy: entry.type == "message", message.{role,content}
+                #   - Claude Code:     entry.type == "user" | "assistant", message.{role,content}
+                entry_type = entry.get("type")
+                if entry_type == "message":
+                    msg = entry.get("message", {})
+                elif entry_type in ("user", "assistant"):
+                    msg = entry.get("message", {}) or {"role": entry_type, "content": entry.get("content", "")}
+                else:
                     continue
 
-                msg = entry.get("message", {})
                 role = msg.get("role", "")
+                if not role and entry_type in ("user", "assistant"):
+                    role = entry_type
 
                 # Only keep user and assistant messages (skip toolResult)
                 if role not in ("user", "assistant"):

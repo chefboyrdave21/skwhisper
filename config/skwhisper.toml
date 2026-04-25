@@ -1,14 +1,17 @@
 # SKWhisper Configuration
 #
-# Agent-specific paths are resolved at runtime from SKCAPSTONE_AGENT env var.
-# You do NOT need to edit this file per-agent — just set SKCAPSTONE_AGENT before
-# starting the daemon (e.g. SKCAPSTONE_AGENT=jarvis skwhisper).
+# Agent-specific paths are resolved at runtime from SKAGENT (or SKCAPSTONE_AGENT).
+# You do NOT need to edit this file per-agent — just set SKAGENT before starting
+# the daemon (e.g. SKAGENT=jarvis skwhisper).
 #
-# Override any value here to pin it regardless of SKCAPSTONE_AGENT.
+# Sovereign defaults (v0.4.0+):
+#   sessions_dir = ~/.skcapstone/agents/{agent}/sessions   (symlink your tool here)
+#   memory_dir   = ~/.skcapstone/agents/{agent}/memory
+#   state_dir    = ~/.skcapstone/agents/{agent}/skwhisper
 
 [paths]
 # Uncomment to override agent-specific defaults:
-# sessions_dir = "~/.openclaw/agents/lumina/sessions"
+# sessions_dir = "~/.skcapstone/agents/lumina/sessions"
 # memory_dir   = "~/.skcapstone/agents/lumina/memory"
 # state_dir    = "~/.skcapstone/agents/lumina/skwhisper"
 

@@ -3,7 +3,7 @@
 Writes session digest Memory nodes + Tag/Person relationships into
 the FalkorDB knowledge graph at 192.168.0.59:16379.
 
-Graph name is derived from SKCAPSTONE_AGENT: {agent}_knowledge
+Graph name is derived from active agent (SKAGENT > SKCAPSTONE_AGENT): {agent}_knowledge
 Node types:     Memory, Tag, Person, Project
 Relationships:  TAGGED_WITH, MENTIONS, PART_OF, RELATED_TO
 """
@@ -20,7 +20,7 @@ log = logging.getLogger("skwhisper.skgraph")
 # Default connection — graph name derived from active agent
 FALKOR_HOST = "192.168.0.59"
 FALKOR_PORT = 16379
-GRAPH_NAME  = f"{os.environ.get('SKCAPSTONE_AGENT', 'lumina')}_knowledge"
+GRAPH_NAME  = f"{os.environ.get('SKAGENT') or os.environ.get('SKCAPSTONE_AGENT') or 'lumina'}_knowledge"
 
 # Known projects for auto-linking
 KNOWN_PROJECTS = [

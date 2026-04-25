@@ -98,14 +98,20 @@ def test_patterns():
         print(f"  Hot topics: {[t['topic'] for t in hot[:3]]}")
 
 
-def test_config():
-    """Test config loading."""
-    from skwhisper.config import Config
+def test_config(monkeypatch):
+    """Test config loading is agent-aware via SKAGENT env."""
+    import importlib
+    monkeypatch.setenv("SKAGENT", "lumina")
+    monkeypatch.delenv("SKCAPSTONE_AGENT", raising=False)
+    import skwhisper.config as cfg_mod
+    importlib.reload(cfg_mod)
 
-    config = Config()  # No TOML, use defaults
+    config = cfg_mod.Config()  # No TOML, use defaults
     assert config.ollama_url == "http://192.168.0.100:11434"
     assert config.qdrant_collection == "lumina-memory"
     assert config.min_messages == 5
+    # Sovereign default: sessions live under skcapstone agent home
+    assert str(config.sessions_dir).endswith("/.skcapstone/agents/lumina/sessions")
     print("✓ config: OK")
     print(f"  State dir: {config.state_dir}")
 
